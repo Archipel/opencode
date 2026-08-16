@@ -37,6 +37,12 @@ export type RetryConfig = {
   max_delay_ms?: number
 }
 
+/** Returns true when max_retries opts out of the cutoff (negative), so retries continue indefinitely. */
+function retryLimit(maxRetries?: number) {
+  if (maxRetries === undefined) return RETRY_MAX_RETRIES
+  return maxRetries < 0 ? Number.POSITIVE_INFINITY : maxRetries
+}
+
 const RETRYABLE_MESSAGE_PATTERNS = [
   /429|500|502|503|504|524/i,
   /rate increased too quickly|rate limit|rate-limit|rate_limit|too many requests/i,
@@ -199,7 +205,7 @@ export function policy(opts: {
       const error = opts.parse(meta.input)
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
-      if (meta.attempt > (opts.overrides?.max_retries ?? RETRY_MAX_RETRIES)) return Cause.done(meta.attempt)
+      if (meta.attempt > retryLimit(opts.overrides?.max_retries)) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
         const wait = delay(
           meta.attempt,

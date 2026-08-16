@@ -174,8 +174,9 @@ export const Info = Schema.Struct({
       backoff_factor: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(1))).annotate({
         description: "Multiplier applied to the delay between retries (default: 2)",
       }),
-      max_retries: Schema.optional(NonNegativeInt).annotate({
-        description: "Maximum number of retries before giving up when a provider request fails (default: 5)",
+      max_retries: Schema.optional(Schema.Int).annotate({
+        description:
+          "Maximum number of retries before giving up when a provider request fails (default: 5; negative = unlimited retries)",
       }),
       max_delay_ms: Schema.optional(PositiveInt).annotate({
         description:

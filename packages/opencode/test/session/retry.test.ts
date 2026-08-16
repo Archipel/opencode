@@ -189,6 +189,30 @@ describe("session.retry.delay", () => {
     }),
   )
 
+  it.instance("policy with max_retries: -1 retries without bound", () =>
+    Effect.gen(function* () {
+      const attempts: number[] = []
+      const error = apiError({ "retry-after-ms": "0" })
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push(info.attempt)
+            }),
+          overrides: { max_retries: -1 },
+        }),
+      )
+
+      yield* Effect.forEach(Array.from({ length: 25 }), () => Effect.ignore(step(error)))
+
+      expect(attempts.length).toBe(25)
+      expect(attempts[0]).toBe(1)
+      expect(attempts[24]).toBe(25)
+    }),
+  )
+
   it.instance("policy with zero max_retries never retries", () =>
     Effect.gen(function* () {
       const attempts: number[] = []

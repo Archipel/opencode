@@ -780,7 +780,7 @@ You can control how failed provider requests are retried through the `retry` opt
 
 - `initial_delay_ms` - Delay before the first retry (default: `2000`).
 - `backoff_factor` - Multiplier applied to the delay between retries (default: `2`).
-- `max_retries` - Number of retries before giving up (default: `5`).
+- `max_retries` - Number of retries before giving up (default: `5`). Set to `-1` for unlimited retries.
 - `max_delay_ms` - Maximum delay between retries when the provider sends no `Retry-After` header (default: `30000`).
 
 `Retry-After` / `Retry-After-Ms` response headers always take precedence over the exponential schedule.

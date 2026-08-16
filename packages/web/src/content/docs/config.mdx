@@ -762,6 +762,31 @@ You can control context compaction behavior through the `compaction` option.
 
 ---
 
+### Retry
+
+You can control how failed provider requests are retried through the `retry` option.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "retry": {
+    "initial_delay_ms": 2000,
+    "backoff_factor": 2,
+    "max_retries": 5,
+    "max_delay_ms": 30000
+  }
+}
+```
+
+- `initial_delay_ms` - Delay before the first retry (default: `2000`).
+- `backoff_factor` - Multiplier applied to the delay between retries (default: `2`).
+- `max_retries` - Number of retries before giving up (default: `5`).
+- `max_delay_ms` - Maximum delay between retries when the provider sends no `Retry-After` header (default: `30000`).
+
+`Retry-After` / `Retry-After-Ms` response headers always take precedence over the exponential schedule.
+
+---
+
 ### Watcher
 
 You can configure file watcher ignore patterns through the `watcher` option.

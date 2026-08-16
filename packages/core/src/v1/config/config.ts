@@ -166,6 +166,25 @@ export const Info = Schema.Struct({
       }),
     }),
   ),
+  retry: Schema.optional(
+    Schema.Struct({
+      initial_delay_ms: Schema.optional(PositiveInt).annotate({
+        description: "Initial delay in milliseconds before the first retry (default: 2000)",
+      }),
+      backoff_factor: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(1))).annotate({
+        description: "Multiplier applied to the delay between retries (default: 2)",
+      }),
+      max_retries: Schema.optional(NonNegativeInt).annotate({
+        description: "Maximum number of retries before giving up when a provider request fails (default: 5)",
+      }),
+      max_delay_ms: Schema.optional(PositiveInt).annotate({
+        description:
+          "Maximum delay in milliseconds between retries when the provider sends no Retry-After header (default: 30000)",
+      }),
+    }),
+  ).annotate({
+    description: "Retry schedule for failed provider requests",
+  }),
   experimental: Schema.optional(
     Schema.Struct({
       disable_paste_summary: Schema.optional(Schema.Boolean),

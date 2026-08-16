@@ -30,6 +30,13 @@ export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
 export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
 export const RETRY_MAX_RETRIES = 5
 
+export type RetryConfig = {
+  initial_delay_ms?: number
+  backoff_factor?: number
+  max_retries?: number
+  max_delay_ms?: number
+}
+
 const RETRYABLE_MESSAGE_PATTERNS = [
   /429|500|502|503|504|524/i,
   /rate increased too quickly|rate limit|rate-limit|rate_limit|too many requests/i,
@@ -43,7 +50,7 @@ function cap(ms: number) {
   return Math.min(ms, RETRY_MAX_DELAY)
 }
 
-export function delay(attempt: number, error?: SessionV1.APIError, random = Math.random()) {
+export function delay(attempt: number, error?: SessionV1.APIError, random = Math.random(), overrides?: RetryConfig) {
   if (error) {
     const headers = error.data.responseHeaders
     if (headers) {
@@ -69,15 +76,17 @@ export function delay(attempt: number, error?: SessionV1.APIError, random = Math
         }
       }
 
-      return cap(exponential(attempt, random))
+      return cap(exponential(attempt, random, overrides))
     }
   }
 
-  return cap(Math.min(exponential(attempt, random), RETRY_MAX_DELAY_NO_HEADERS))
+  return cap(Math.min(exponential(attempt, random, overrides), overrides?.max_delay_ms ?? RETRY_MAX_DELAY_NO_HEADERS))
 }
 
-function exponential(attempt: number, random: number) {
-  const base = RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1)
+function exponential(attempt: number, random: number, overrides?: RetryConfig) {
+  const base =
+    (overrides?.initial_delay_ms ?? RETRY_INITIAL_DELAY) *
+    Math.pow(overrides?.backoff_factor ?? RETRY_BACKOFF_FACTOR, attempt - 1)
   return Math.ceil(base + base * RETRY_JITTER_FACTOR * random)
 }
 
@@ -183,15 +192,21 @@ export function policy(opts: {
   provider: string
   parse: (error: unknown) => Err
   set: (input: { attempt: number; message: string; action?: Retryable["action"]; next: number }) => Effect.Effect<void>
+  overrides?: RetryConfig
 }) {
   return Schedule.fromStepWithMetadata(
     Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
       const error = opts.parse(meta.input)
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
-      if (meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
+      if (meta.attempt > (opts.overrides?.max_retries ?? RETRY_MAX_RETRIES)) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
-        const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)
+        const wait = delay(
+          meta.attempt,
+          SessionV1.APIError.isInstance(error) ? error : undefined,
+          Math.random(),
+          opts.overrides,
+        )
         const now = yield* Clock.currentTimeMillis
         yield* opts.set({
           attempt: meta.attempt,

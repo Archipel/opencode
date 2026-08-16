@@ -94,6 +94,26 @@ describe("session.retry.delay", () => {
     expect(SessionRetry.delay(1, error)).toBe(SessionRetry.RETRY_MAX_DELAY)
   })
 
+  test("honours configured initial delay and backoff factor", () => {
+    const error = apiError()
+    const overrides = { initial_delay_ms: 1000, backoff_factor: 3 }
+    const delays = Array.from({ length: 5 }, (_, index) => SessionRetry.delay(index + 1, error, 0, overrides))
+    expect(delays).toStrictEqual([1000, 3000, 9000, 27000, 30000])
+  })
+
+  test("honours configured max_delay_ms clamp", () => {
+    const error = apiError()
+    const overrides = { max_delay_ms: 1500 }
+    expect(SessionRetry.delay(1, error, 0, overrides)).toBe(1500)
+    expect(SessionRetry.delay(2, error, 0, overrides)).toBe(1500)
+  })
+
+  test("retry-after headers still win over configured exponential schedule", () => {
+    const overrides = { initial_delay_ms: 100, backoff_factor: 5, max_delay_ms: 250 }
+    expect(SessionRetry.delay(1, apiError({ "retry-after-ms": "1500" }), 0, overrides)).toBe(1500)
+    expect(SessionRetry.delay(2, apiError({ "retry-after": "30" }), 0, overrides)).toBe(30000)
+  })
+
   it.instance("policy updates retry status and increments attempts", () =>
     Effect.gen(function* () {
       const sessionID = SessionID.make("session-retry-test")
@@ -144,6 +164,78 @@ describe("session.retry.delay", () => {
       )
 
       expect(attempts).toStrictEqual([1, 2, 3, 4, 5])
+    }),
+  )
+
+  it.instance("policy honours configured max_retries", () =>
+    Effect.gen(function* () {
+      const attempts: number[] = []
+      const error = apiError({ "retry-after-ms": "0" })
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push(info.attempt)
+            }),
+          overrides: { max_retries: 10 },
+        }),
+      )
+
+      yield* Effect.forEach(Array.from({ length: 7 }), () => Effect.ignore(step(error)))
+
+      expect(attempts).toStrictEqual([1, 2, 3, 4, 5, 6, 7])
+    }),
+  )
+
+  it.instance("policy with zero max_retries never retries", () =>
+    Effect.gen(function* () {
+      const attempts: number[] = []
+      const error = apiError({ "retry-after-ms": "0" })
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push(info.attempt)
+            }),
+          overrides: { max_retries: 0 },
+        }),
+      )
+
+      yield* Effect.ignore(step(error))
+
+      expect(attempts).toStrictEqual([])
+    }),
+  )
+
+  it.instance("policy never retries non-retryable errors regardless of overrides", () =>
+    Effect.gen(function* () {
+      const attempts: number[] = []
+      const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+        new SessionV1.APIError({
+          message: "Bad request",
+          isRetryable: false,
+          statusCode: 400,
+        }).toObject(),
+      )
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push(info.attempt)
+            }),
+          overrides: { max_retries: 10, initial_delay_ms: 100 },
+        }),
+      )
+
+      yield* Effect.ignore(step(error))
+
+      expect(attempts).toStrictEqual([])
     }),
   )
 })

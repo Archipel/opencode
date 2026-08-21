@@ -16,9 +16,10 @@ import { isOverflow } from "./overflow"
 import { PartID } from "./schema"
 import type { SessionID } from "./schema"
 import { SessionRetry } from "./retry"
+import { SessionFallback } from "./fallback"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
-import type { Provider } from "@/provider/provider"
+import { Provider } from "@/provider/provider"
 import { Question } from "@/question"
 import { errorMessage } from "@/util/error"
 import { isRecord } from "@/util/record"
@@ -94,6 +95,7 @@ const layer = Layer.effect(
     const image = yield* Image.Service
     const events = yield* EventV2Bridge.Service
     const database = yield* Database.Service
+    const provider = yield* Provider.Service
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
@@ -116,7 +118,7 @@ const layer = Layer.effect(
 
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
-          providerID: input.model.providerID,
+          providerID: ctx.model.providerID,
           aborted,
         })
 
@@ -632,6 +634,30 @@ const layer = Layer.effect(
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
+        // When the configured model is cooling down after a rate limit, resolve
+        // and switch to its fallback so this turn doesn't burn a request.
+        const cfg = yield* config.get()
+        const fallback = SessionFallback.next(
+          { providerID: streamInput.model.providerID, modelID: streamInput.model.id },
+          cfg,
+        )
+        if (fallback) {
+          const next = yield* provider.getModel(fallback.providerID, fallback.modelID).pipe(
+            Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)),
+          )
+          if (next) {
+            yield* Effect.logInfo("model fallback", {
+              "session.id": input.sessionID,
+              from: `${streamInput.model.providerID}/${streamInput.model.id}`,
+              to: `${next.providerID}/${next.id}`,
+            })
+            ctx.model = next
+            streamInput.model = next
+            ctx.assistantMessage.modelID = next.id
+            ctx.assistantMessage.providerID = next.providerID
+          }
+        }
+
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {
             ctx.currentText = undefined
@@ -661,7 +687,7 @@ const layer = Layer.effect(
               SessionRetry.policy({
                 provider: input.model.providerID,
                 parse,
-                overrides: (yield* config.get()).retry,
+                overrides: cfg.retry,
                 set: (info) => {
                   return status.set(ctx.sessionID, {
                     type: "retry",
@@ -671,6 +697,32 @@ const layer = Layer.effect(
                     next: info.next,
                   })
                 },
+                fallback: ({ error }) =>
+                  Effect.gen(function* () {
+                    const current = streamInput.model
+                    if (!SessionFallback.isRateLimited(error)) return false
+                    SessionFallback.markRateLimited(current.providerID, current.id, error, cfg)
+                    const swap = SessionFallback.next(
+                      { providerID: current.providerID, modelID: current.id },
+                      cfg,
+                    )
+                    if (swap === undefined) return false
+                    const next = yield* provider.getModel(swap.providerID, swap.modelID).pipe(
+                      Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)),
+                    )
+                    if (!next) return false
+                    yield* Effect.logInfo("rate-limited model swapped to fallback", {
+                      "session.id": input.sessionID,
+                      from: `${current.providerID}/${current.id}`,
+                      to: `${next.providerID}/${next.id}`,
+                      message: SessionV1.APIError.isInstance(error) ? error.data.message : undefined,
+                    })
+                    ctx.model = next
+                    streamInput.model = next
+                    ctx.assistantMessage.modelID = next.id
+                    ctx.assistantMessage.providerID = next.providerID
+                    return true
+                  }),
               }),
             ),
             Effect.catch(halt),
@@ -713,6 +765,7 @@ export const node = LayerNode.make({
     Image.node,
     EventV2Bridge.node,
     Database.node,
+    Provider.node,
   ],
 })
 

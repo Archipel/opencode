@@ -787,6 +787,35 @@ You can control how failed provider requests are retried through the `retry` opt
 
 ---
 
+### Model Fallback
+
+A model can declare a `fallback` model that opencode automatically switches to
+when the model returns a rate limit error (HTTP 429 or a rate-limit message).
+The current request is retried immediately on the fallback, and subsequent
+requests keep using it until the rate-limit window has passed, after which
+requests return to the original model. The rate limit error is still surfaced
+in the session status while this happens.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "myprovider": {
+      "models": {
+        "small-quota": {
+          "fallback": "myprovider/big-quota"
+        }
+      }
+    }
+  }
+}
+```
+
+- `fallback` - Model in the format `provider/model` to use while this model is rate-limited.
+- `fallback_cooldown_ms` - Duration in milliseconds the fallback stays active (default: `60000`). `Retry-After` / `Retry-After-Ms` response headers take precedence when present.
+
+---
+
 ### Watcher
 
 You can configure file watcher ignore patterns through the `watcher` option.

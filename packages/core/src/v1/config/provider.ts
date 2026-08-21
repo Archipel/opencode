@@ -14,6 +14,14 @@ export const Model = Schema.Struct({
   id: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   family: Schema.optional(Schema.String),
+  fallback: Schema.optional(Schema.String).annotate({
+    description:
+      'Model in the format provider/model to fall back to when this model returns a rate limit error (e.g. HTTP 429), retried again once the rate limit window has passed',
+  }),
+  fallback_cooldown_ms: Schema.optional(PositiveInt).annotate({
+    description:
+      "Duration in milliseconds during which the model is considered rate-limited and its fallback is used instead (default: 60000). Retry-After / Retry-After-Ms response headers take precedence",
+  }),
   release_date: Schema.optional(Schema.String),
   attachment: Schema.optional(Schema.Boolean),
   reasoning: Schema.optional(Schema.Boolean),

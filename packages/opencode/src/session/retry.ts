@@ -101,11 +101,12 @@ export function retryable(error: Err, provider: string) {
   if (SessionV1.ContextOverflowError.isInstance(error)) return undefined
   if (SessionV1.APIError.isInstance(error)) {
     const status = error.data.statusCode
-    // 5xx errors are transient server failures and should always be retried,
-    // even when the provider SDK doesn't explicitly mark them as retryable.
+    // 429 rate limits and 5xx errors are transient and should always be
+    // retried, even when the provider SDK doesn't explicitly mark them as
+    // retryable.
     if (
       !error.data.isRetryable &&
-      !(status !== undefined && status >= 500) &&
+      !(status !== undefined && (status === 429 || status >= 500)) &&
       !matchesRetryableMessage(error.data.message) &&
       !matchesRetryableMessage(error.data.responseBody)
     )
@@ -199,6 +200,8 @@ export function policy(opts: {
   parse: (error: unknown) => Err
   set: (input: { attempt: number; message: string; action?: Retryable["action"]; next: number }) => Effect.Effect<void>
   overrides?: RetryConfig
+  /** Called on each retryable failure. Returning true (the model was swapped for a fallback) retries immediately. */
+  fallback?: (input: { error: Err }) => Effect.Effect<boolean>
 }) {
   return Schedule.fromStepWithMetadata(
     Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
@@ -207,12 +210,15 @@ export function policy(opts: {
       if (!retry) return Cause.done(meta.attempt)
       if (meta.attempt > retryLimit(opts.overrides?.max_retries)) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
-        const wait = delay(
-          meta.attempt,
-          SessionV1.APIError.isInstance(error) ? error : undefined,
-          Math.random(),
-          opts.overrides,
-        )
+        const swapped = opts.fallback ? yield* opts.fallback({ error }) : false
+        const wait = swapped
+          ? 0
+          : delay(
+              meta.attempt,
+              SessionV1.APIError.isInstance(error) ? error : undefined,
+              Math.random(),
+              opts.overrides,
+            )
         const now = yield* Clock.currentTimeMillis
         yield* opts.set({
           attempt: meta.attempt,

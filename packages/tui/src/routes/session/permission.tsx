@@ -1,5 +1,6 @@
 import { createStore } from "solid-js/store"
 import { dirname } from "node:path"
+import { execFile } from "node:child_process"
 import { createMemo, For, Match, Show, Switch } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
@@ -17,7 +18,59 @@ import { useTuiConfig } from "../../config"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 
-type PermissionStage = "permission" | "always" | "reject"
+type PermissionStage = "permission" | "always" | "reject" | "investigate" | "result" | "discuss"
+
+// Result of `ai-sessions gate investigate --cmd … --json` (see gate_investigate.rs).
+type Investigation = {
+  command: string
+  verdict: "propose" | "no-rule" | "unsafe"
+  reasoning: string
+  rule?: { regex: string; note?: string; rejected_reason?: string }
+  matcher_suggestion?: string
+  model: string
+}
+
+const AI_SESSIONS_CANDIDATES = [
+  `${process.env.HOME}/bin/ai-sessions`,
+  `${process.env.HOME}/.claude/bin/ai-sessions`,
+  "ai-sessions",
+]
+
+let aiSessionsBin: string | undefined
+
+async function resolveAiSessions(): Promise<string> {
+  if (aiSessionsBin) return aiSessionsBin
+  for (const bin of AI_SESSIONS_CANDIDATES) {
+    // --help is fast and local (no DB open, no Windows delegation).
+    const found = await new Promise<boolean>((resolve) => {
+      execFile(bin, ["--help"], { timeout: 5_000 }, (err) => resolve(!err))
+    }).catch(() => false)
+    if (found) {
+      aiSessionsBin = bin
+      return bin
+    }
+  }
+  throw new Error("ai-sessions CLI not found (tried ~/bin/ai-sessions and PATH)")
+}
+
+function runAiSessions(args: string[], timeout: number): Promise<string> {
+  return resolveAiSessions().then(
+    (bin) =>
+      new Promise<string>((resolve, reject) => {
+        execFile(bin, args, { timeout, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) =>
+          err ? reject(err instanceof Error ? err : new Error(String(err))) : resolve(stdout),
+        )
+      }),
+  )
+}
+
+function investigateCommand(command: string): Promise<Investigation> {
+  return runAiSessions(["gate", "investigate", "--cmd", command, "--json"], 180_000).then((stdout) => {
+    const parsed = JSON.parse(stdout) as Investigation
+    if (!parsed || typeof parsed.reasoning !== "string") throw new Error("malformed investigation reply")
+    return parsed
+  })
+}
 
 function EditBody(props: { request: PermissionRequest }) {
   const themeState = useTheme()
@@ -114,6 +167,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   const sync = useSync()
   const [store, setStore] = createStore({
     stage: "permission" as PermissionStage,
+    investigating: false,
+    investError: "",
+    investigation: null as Investigation | null,
+    discussAction: "once" as "once" | "reject",
   })
   const pathFormatter = usePathFormatter()
 
@@ -133,8 +190,246 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 
   const { theme } = useTheme()
 
+  const bashCommand = createMemo(() => {
+    if (props.request.permission !== "bash") return ""
+    const raw = input().command
+    if (typeof raw === "string" && raw) return raw
+    const meta = props.request.metadata?.command
+    return typeof meta === "string" ? meta : ""
+  })
+
+  const replyOnce = () =>
+    sdk.client.permission.reply({
+      reply: "once",
+      requestID: props.request.id,
+      directory: props.directory,
+      workspace: project.workspace.current(),
+    })
+  const replyReject = (message?: string) =>
+    sdk.client.permission.reply({
+      reply: "reject",
+      message: message || undefined,
+      requestID: props.request.id,
+      directory: props.directory,
+      workspace: project.workspace.current(),
+    })
+
+  const startInvestigate = async () => {
+    const command = bashCommand()
+    if (!command || store.investigating) return
+    setStore({ stage: "investigate", investigating: true, investError: "", investigation: null })
+    try {
+      const result = await investigateCommand(command)
+      // The user may have cancelled while the CLI was running — don't yank
+      // them back to the result stage.
+      setStore((prev) =>
+        prev.stage === "investigate"
+          ? { investigating: false, investigation: result, stage: "result" as const }
+          : {},
+      )
+    } catch (e) {
+      setStore((prev) =>
+        prev.stage === "investigate"
+          ? {
+              investigating: false,
+              investError: e instanceof Error ? e.message : String(e),
+              stage: "result" as const,
+            }
+          : {},
+      )
+    }
+  }
+
+  const applyRule = async () => {
+    const rule = store.investigation?.rule
+    if (!rule || rule.rejected_reason) return
+    try {
+      const args = ["gate", "add", rule.regex, "--kind", "allow", "--host", "%"]
+      if (rule.note) args.push("--note", rule.note)
+      await runAiSessions(args, 30_000)
+    } catch (e) {
+      setStore({
+        investError: e instanceof Error ? e.message : String(e),
+        stage: "result",
+      })
+      return
+    }
+    setStore("stage", "permission")
+    void replyOnce()
+  }
+
+  const openDiscuss = (action: "once" | "reject") => {
+    setStore({ discussAction: action, stage: "discuss" })
+  }
+
+  const sendDiscuss = async (message: string) => {
+    const text = message.trim()
+    if (!text) return
+    if (store.discussAction === "reject") {
+      void replyReject(text)
+    } else {
+      // Allow the command once AND steer the session with the user's message.
+      void replyOnce()
+      void sdk.client.session.prompt({
+        sessionID: props.request.sessionID,
+        directory: props.directory,
+        workspace: project.workspace.current(),
+        parts: [{ type: "text", text }],
+      })
+    }
+    setStore("stage", "permission")
+  }
+
   return (
     <Switch>
+      <Match when={store.stage === "investigate"}>
+        <Prompt
+          title="Investigating auto-allow"
+          body={
+            <box paddingLeft={1} flexDirection="column" gap={1}>
+              <text fg={theme.text}>{"$ " + bashCommand()}</text>
+              <text fg={theme.textMuted}>
+                {store.investigating ? "Asking the model to analyze this command family…" : ""}
+              </text>
+            </box>
+          }
+          options={{ cancel: "Cancel" }}
+          escapeKey="cancel"
+          onSelect={() => {
+            setStore("stage", "permission")
+          }}
+        />
+      </Match>
+      <Match when={store.stage === "result"}>
+        {(() => {
+          const inv = store.investigation
+          if (store.investError || !inv) {
+            return (
+              <Prompt
+                title="Investigation failed"
+                body={
+                  <box paddingLeft={1}>
+                    <text fg={theme.error} wrapMode="word">
+                      {store.investError || "No investigation result"}
+                    </text>
+                  </box>
+                }
+                options={{ back: "Back" }}
+                escapeKey="back"
+                fullscreen
+                onSelect={() => setStore("stage", "permission")}
+              />
+            )
+          }
+
+          const propose = inv.verdict === "propose" && inv.rule && !inv.rule.rejected_reason
+          const verdictLabel =
+            inv.verdict === "propose"
+              ? "Safe to auto-allow — validated rule proposal below"
+              : inv.verdict === "unsafe"
+                ? "NOT safe to auto-allow"
+                : "No safe regex rule available"
+
+          return (
+            <Prompt
+              title="Auto-allow analysis"
+              header={
+                <box flexDirection="column" gap={0}>
+                  <box flexDirection="row" gap={1} flexShrink={0}>
+                    <text fg={propose ? theme.success : theme.warning}>{propose ? "✓" : "△"}</text>
+                    <text fg={theme.text}>{verdictLabel}</text>
+                  </box>
+                  <box flexDirection="row" gap={1} paddingLeft={2} flexShrink={0}>
+                    <text fg={theme.textMuted} flexShrink={0}>
+                      {"#"}
+                    </text>
+                    <text fg={theme.text} wrapMode="word">
+                      {"$ " + inv.command}
+                    </text>
+                  </box>
+                </box>
+              }
+              body={
+                <scrollbox
+                  height="100%"
+                  verticalScrollbarOptions={{
+                    trackOptions: {
+                      backgroundColor: theme.background,
+                      foregroundColor: theme.borderActive,
+                    },
+                  }}
+                >
+                  <box flexDirection="column" gap={1} paddingRight={1}>
+                    <box paddingLeft={1}>
+                      <text fg={theme.text} wrapMode="word">
+                        {inv.reasoning}
+                      </text>
+                    </box>
+                    <Show when={inv.rule?.rejected_reason}>
+                      <box paddingLeft={1} flexDirection="column" gap={0}>
+                        <text fg={theme.warning}>{"Proposed rule rejected by safety checks:"}</text>
+                        <text fg={theme.warning}>{"  " + inv.rule?.rejected_reason}</text>
+                      </box>
+                    </Show>
+                    <Show when={inv.rule}>
+                      <box paddingLeft={1} flexDirection="column" gap={0}>
+                        <text fg={theme.textMuted}>{"Proposed gate rule"}</text>
+                        <text fg={inv.rule?.rejected_reason ? theme.warning : theme.success}>
+                          {"  " + inv.rule?.regex}
+                        </text>
+                      </box>
+                    </Show>
+                    <Show when={inv.matcher_suggestion}>
+                      <box paddingLeft={1} flexDirection="column" gap={0}>
+                        <text fg={theme.textMuted}>{"Matcher suggestion (needs a work item)"}</text>
+                        <text fg={theme.text}>{"  " + inv.matcher_suggestion}</text>
+                      </box>
+                    </Show>
+                    <box paddingLeft={1}>
+                      <text fg={theme.textMuted}>{"Analyzed by " + inv.model + " via ai-sessions"}</text>
+                    </box>
+                  </box>
+                </scrollbox>
+              }
+              options={
+                propose
+                  ? {
+                      apply: "Add rule & allow",
+                      onceMsg: "Allow once w/ message",
+                      rejectMsg: "Reject w/ message",
+                    }
+                  : { onceMsg: "Allow once w/ message", rejectMsg: "Reject w/ message" }
+              }
+              fullscreen
+              onEscape={() => setStore("stage", "permission")}
+              onSelect={(option) => {
+                if (option === "apply") {
+                  void applyRule()
+                  return
+                }
+                if (option === "onceMsg") {
+                  openDiscuss("once")
+                  return
+                }
+                if (option === "rejectMsg") {
+                  openDiscuss("reject")
+                  return
+                }
+                setStore("stage", "permission")
+              }}
+            />
+          )
+        })()}
+      </Match>
+      <Match when={store.stage === "discuss"}>
+        <DiscussPrompt
+          allow={store.discussAction === "once"}
+          onConfirm={(message) => {
+            void sendDiscuss(message)
+          }}
+          onCancel={() => setStore("stage", "result")}
+        />
+      </Match>
       <Match when={store.stage === "always"}>
         <Prompt
           title="Always allow"
@@ -175,15 +470,11 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
         />
       </Match>
       <Match when={store.stage === "reject"}>
-        <RejectPrompt
+        <DiscussPrompt
+          allow={false}
           onConfirm={(message) => {
-            void sdk.client.permission.reply({
-              reply: "reject",
-              requestID: props.request.id,
-              directory: props.directory,
-              message: message || undefined,
-              workspace: project.workspace.current(),
-            })
+            void replyReject(message)
+            setStore("stage", "permission")
           }}
           onCancel={() => {
             setStore("stage", "permission")
@@ -402,12 +693,20 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               header={header()}
               body={current.body}
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={
+                props.request.permission === "bash"
+                  ? { once: "Allow once", investigate: "Investigate auto-allow", reject: "Reject" }
+                  : { once: "Allow once", always: "Allow always", reject: "Reject" }
+              }
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
                 if (option === "always") {
                   setStore("stage", "always")
+                  return
+                }
+                if (option === "investigate") {
+                  void startInvestigate()
                   return
                 }
                 if (option === "reject") {
@@ -440,7 +739,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   )
 }
 
-function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: () => void }) {
+function DiscussPrompt(props: { allow: boolean; onConfirm: (message: string) => void; onCancel: () => void }) {
   let input: TextareaRenderable
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
@@ -451,7 +750,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
     commands: [
       {
         name: "app.exit",
-        title: "Cancel permission rejection",
+        title: "Cancel permission message",
         category: "Permission",
         run() {
           props.onCancel()
@@ -459,11 +758,11 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
       },
     ],
     bindings: [
-      { key: "escape", desc: "Cancel permission rejection", group: "Permission", cmd: () => props.onCancel() },
+      { key: "escape", desc: "Cancel permission message", group: "Permission", cmd: () => props.onCancel() },
       ...tuiConfig.keybinds.get("app.exit"),
       {
         key: "return",
-        desc: "Confirm permission rejection",
+        desc: props.allow ? "Allow once with message" : "Reject with message",
         group: "Permission",
         cmd: () => props.onConfirm(input.plainText),
       },
@@ -474,16 +773,20 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
     <box
       backgroundColor={theme.backgroundPanel}
       border={["left"]}
-      borderColor={theme.error}
+      borderColor={props.allow ? theme.success : theme.error}
       customBorderChars={SplitBorder.customBorderChars}
     >
       <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
         <box flexDirection="row" gap={1} paddingLeft={1}>
-          <text fg={theme.error}>{"△"}</text>
-          <text fg={theme.text}>Reject permission</text>
+          <text fg={props.allow ? theme.success : theme.error}>{props.allow ? "✓" : "△"}</text>
+          <text fg={theme.text}>{props.allow ? "Allow once with message" : "Reject with message"}</text>
         </box>
         <box paddingLeft={1}>
-          <text fg={theme.textMuted}>Tell OpenCode what to do differently</text>
+          <text fg={theme.textMuted}>
+            {props.allow
+              ? "The command runs once; your message is sent to the agent"
+              : "Tell OpenCode what to do differently"}
+          </text>
         </box>
       </box>
       <box
@@ -501,7 +804,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
         <textarea
           ref={(val: TextareaRenderable) => {
             input = val
-            val.traits = { status: "REJECT" }
+            val.traits = { status: props.allow ? "ALLOW" : "REJECT" }
           }}
           focused
           textColor={theme.text}
@@ -514,7 +817,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
             enter <span style={{ fg: theme.textMuted }}>confirm</span>
           </text>
           <text fg={theme.text}>
-            esc <span style={{ fg: theme.textMuted }}>cancel</span>
+            esc <span style={{ fg: theme.textMuted }}>back</span>
           </text>
         </box>
       </box>
@@ -529,6 +832,7 @@ function Prompt<const T extends Record<string, string>>(props: {
   options: T
   escapeKey?: keyof T
   fullscreen?: boolean
+  onEscape?: () => void
   onSelect: (option: keyof T) => void
 }) {
   const { theme } = useTheme()
@@ -547,9 +851,13 @@ function Prompt<const T extends Record<string, string>>(props: {
     commands: [
       {
         name: "app.exit",
-        title: "Reject permission",
+        title: props.onEscape ? "Back" : "Reject permission",
         category: "Permission",
         run() {
+          if (props.onEscape) {
+            props.onEscape()
+            return
+          }
           if (!props.escapeKey) return
           props.onSelect(props.escapeKey)
         },
@@ -611,16 +919,25 @@ function Prompt<const T extends Record<string, string>>(props: {
         group: "Permission",
         cmd: () => props.onSelect(store.selected),
       },
-      ...(props.escapeKey
+      ...(props.onEscape
         ? [
             {
               key: "escape",
-              desc: "Reject permission",
+              desc: "Back",
               group: "Permission",
-              cmd: () => props.onSelect(props.escapeKey!),
+              cmd: () => props.onEscape!(),
             },
           ]
-        : []),
+        : props.escapeKey
+          ? [
+              {
+                key: "escape",
+                desc: "Reject permission",
+                group: "Permission",
+                cmd: () => props.onSelect(props.escapeKey!),
+              },
+            ]
+          : []),
       ...(props.escapeKey ? tuiConfig.keybinds.get("app.exit") : []),
       ...(props.fullscreen ? tuiConfig.keybinds.get("permission.prompt.fullscreen") : []),
     ],

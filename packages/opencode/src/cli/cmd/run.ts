@@ -326,6 +326,9 @@ export const RunCommand = effectCmd({
         } catch (error) {
           dieInteractive(error)
         }
+        // Must run before ./run/runtime is imported: it wraps the first
+        // @opentui/core load to clean up Bun's extracted native libraries.
+        await import("./run/native-lib-cleanup")
       }
 
       const replay = args.replay === false ? false : args.replay || args["replay-limit"] !== undefined

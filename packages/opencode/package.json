@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-"version": "1.18.21-patched.4bf6d7bdc",
+  "version": "1.18.22",
   "name": "opencode",
   "type": "module",
   "license": "MIT",

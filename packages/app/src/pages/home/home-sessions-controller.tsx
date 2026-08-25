@@ -21,6 +21,7 @@ import { pathKey } from "@/utils/path-key"
 import { showToast } from "@/utils/toast"
 import { Binary } from "@opencode-ai/core/util/binary"
 import { archiveHomeSession } from "../home-session-archive"
+import { pendingHomeProjectDirectories } from "./home-project-discovery"
 import type { HomeController } from "./home-controller"
 
 const HOME_SESSION_LIMIT = 64
@@ -97,6 +98,14 @@ export function createHomeSessionsController(home: HomeController) {
   const records = createMemo(() => allRecords().slice(0, HOME_SESSION_LIMIT))
   const groups = createMemo(() => groupSessions(records(), language))
   const prefetched = new Set<string>()
+
+  createEffect(() => {
+    const ctx = home.server.focusedContext()
+    if (!ctx) return
+    const pending = pendingHomeProjectDirectories(indexedSessions(), home.project.list().flatMap(directories))
+    // open() prepends, so register oldest-first so newest-session directories land at the top.
+    pending.forEach((directory) => ctx.projects.open(directory))
+  })
 
   createEffect(() => {
     const ctx = home.server.focusedContext()

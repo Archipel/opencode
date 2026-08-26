@@ -14,8 +14,10 @@ import {
 import type { LocalProject } from "@/context/layout"
 import { useLanguage } from "@/context/language"
 import { ServerConnection } from "@/context/server"
-import { sessionHasOpenTab, useTabs } from "@/context/tabs"
+import { sessionHasOpenTab, useTabs, type Tab } from "@/context/tabs"
 import { compareSessionTime, displayName, errorMessage, projectForSession } from "@/pages/layout/helpers"
+import { orderHomeSessions } from "./home-session-order"
+import type { ServerSync } from "@/context/server-sync"
 import { useSessionTabAvatarState } from "@/pages/layout/project-avatar-state"
 import { pathKey } from "@/utils/path-key"
 import { showToast } from "@/utils/toast"
@@ -52,7 +54,8 @@ export function createHomeSessionsController(home: HomeController) {
   const projectByID = createMemo(
     () => new Map(home.project.list().flatMap((project) => (project.id ? [[project.id, project] as const] : []))),
   )
-  const homeSessions = () => home.server.focusedSync().homeSessions
+  const focusedSync = home.server.focusedSync
+  const homeSessions = () => focusedSync().homeSessions
   const sessionEventLoad = useQuery(() => ({
     queryKey: homeSessions().eventsKey,
     queryFn: async (): Promise<HomeSessionEvents> => ({ sequence: 0, entries: [] }),
@@ -95,7 +98,12 @@ export function createHomeSessionsController(home: HomeController) {
       projectByID,
     }),
   )
-  const records = createMemo(() => allRecords().slice(0, HOME_SESSION_LIMIT))
+  const orderedRecords = createMemo(() => {
+    const sync = focusedSync()
+    const server = home.selection.value().server
+    return orderHomeSessions(allRecords(), tabs.store, server, (sessionId) => sync.session.data.session_working(sessionId))
+  })
+  const records = createMemo(() => orderedRecords().slice(0, HOME_SESSION_LIMIT))
   const groups = createMemo(() => groupSessions(records(), language))
   const prefetched = new Set<string>()
 
@@ -180,7 +188,7 @@ export function createHomeSessionsController(home: HomeController) {
       records,
       groups,
       loading: () => sessionLoad.isLoading,
-      searchRecords: allRecords,
+      searchRecords: orderedRecords,
     },
     session: {
       showProjectName: () => !home.project.selected(),

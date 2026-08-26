@@ -1,8 +1,7 @@
 import { WebPush } from "@opencode-ai/core/web-push"
 import { Effect } from "effect"
-import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { response } from "../location"
 
 export const WebPushHandler = HttpApiBuilder.group(Api, "server.webpush", (handlers) =>
   Effect.gen(function* () {

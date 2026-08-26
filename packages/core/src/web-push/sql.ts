@@ -5,7 +5,7 @@ import type { WebPush } from "@opencode-ai/schema/web-push"
 export const WebPushVAPIDTable = sqliteTable("web_push_vapid", {
   id: integer().primaryKey(),
   public_key: text().$type<WebPush.VAPIDPublicKey>().notNull(),
-  private_key: text().$type<WebPush.VAPIDPrivateKey>().notNull(),
+   private_key: text().notNull(),
   time_created: integer().notNull(),
 })
 

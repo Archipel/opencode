@@ -1762,6 +1762,8 @@ export type ProviderConfig = {
       id?: string
       name?: string
       family?: string
+      fallback?: string
+      fallback_cooldown_ms?: number
       release_date?: string
       attachment?: boolean
       reasoning?: boolean
@@ -2017,6 +2019,15 @@ export type Config = {
     tail_turns?: number
     preserve_recent_tokens?: number
     reserved?: number
+  }
+  retry?: {
+    initial_delay_ms?: number
+    /**
+     * Multiplier applied to the delay between retries (default: 2)
+     */
+    backoff_factor?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    max_retries?: number
+    max_delay_ms?: number
   }
   experimental?: {
     disable_paste_summary?: boolean
@@ -6149,6 +6160,35 @@ export type ReferenceInfo = {
 
 export type ProjectCopyCopy = {
   directory: string
+}
+
+export type WebPushPushSubscriptionKeys = {
+  p256dh: string
+  auth: string
+}
+
+export type WebPushUpsertSubscriptionInput = {
+  id: string
+  endpoint: string
+  keys: WebPushPushSubscriptionKeys
+}
+
+export type WebPushPushSubscription = {
+  id: string
+  endpoint: string
+  keys: WebPushPushSubscriptionKeys
+  timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  timeUpdated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type WebPushUpsertSubscriptionResponse = {
+  data: WebPushPushSubscription
+}
+
+export type WebPushRemoveSubscriptionResponse = {
+  data: {
+    success: boolean
+  }
 }
 
 export type EventModelsDevRefreshed = {
@@ -13584,6 +13624,101 @@ export type V2ProjectCopyRefreshResponses = {
 }
 
 export type V2ProjectCopyRefreshResponse = V2ProjectCopyRefreshResponses[keyof V2ProjectCopyRefreshResponses]
+
+export type WebpushVapidGetData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/webpush/vapid"
+}
+
+export type WebpushVapidGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type WebpushVapidGetError = WebpushVapidGetErrors[keyof WebpushVapidGetErrors]
+
+export type WebpushVapidGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: {
+      publicKey: string
+    }
+  }
+}
+
+export type WebpushVapidGetResponse = WebpushVapidGetResponses[keyof WebpushVapidGetResponses]
+
+export type WebpushSubscriptionUpsertData = {
+  body: WebPushUpsertSubscriptionInput
+  path?: never
+  query?: never
+  url: "/api/webpush/subscription"
+}
+
+export type WebpushSubscriptionUpsertErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type WebpushSubscriptionUpsertError = WebpushSubscriptionUpsertErrors[keyof WebpushSubscriptionUpsertErrors]
+
+export type WebpushSubscriptionUpsertResponses = {
+  /**
+   * WebPush.UpsertSubscriptionResponse
+   */
+  200: WebPushUpsertSubscriptionResponse
+}
+
+export type WebpushSubscriptionUpsertResponse =
+  WebpushSubscriptionUpsertResponses[keyof WebpushSubscriptionUpsertResponses]
+
+export type WebpushSubscriptionRemoveData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: never
+  url: "/api/webpush/subscription/{id}"
+}
+
+export type WebpushSubscriptionRemoveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type WebpushSubscriptionRemoveError = WebpushSubscriptionRemoveErrors[keyof WebpushSubscriptionRemoveErrors]
+
+export type WebpushSubscriptionRemoveResponses = {
+  /**
+   * WebPush.RemoveSubscriptionResponse
+   */
+  200: WebPushRemoveSubscriptionResponse
+}
+
+export type WebpushSubscriptionRemoveResponse =
+  WebpushSubscriptionRemoveResponses[keyof WebpushSubscriptionRemoveResponses]
 
 export type PtyConnectData = {
   body?: never

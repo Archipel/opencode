@@ -2805,3 +2805,37 @@ export type ProjectCopiesRefreshInput = {
 }
 
 export type ProjectCopiesRefreshOutput = void
+
+export type WebpushGetOutput = { readonly data: { readonly publicKey: string } }["data"]
+
+export type WebpushUpsertInput = {
+  readonly id: {
+    readonly id: string
+    readonly endpoint: string
+    readonly keys: { readonly p256dh: string; readonly auth: string }
+  }["id"]
+  readonly endpoint: {
+    readonly id: string
+    readonly endpoint: string
+    readonly keys: { readonly p256dh: string; readonly auth: string }
+  }["endpoint"]
+  readonly keys: {
+    readonly id: string
+    readonly endpoint: string
+    readonly keys: { readonly p256dh: string; readonly auth: string }
+  }["keys"]
+}
+
+export type WebpushUpsertOutput = {
+  readonly data: {
+    readonly id: string
+    readonly endpoint: string
+    readonly keys: { readonly p256dh: string; readonly auth: string }
+    readonly timeCreated: number
+    readonly timeUpdated: number
+  }
+}["data"]
+
+export type WebpushRemoveInput = { readonly id: { readonly id: string }["id"] }
+
+export type WebpushRemoveOutput = { readonly data: { readonly success: boolean } }["data"]

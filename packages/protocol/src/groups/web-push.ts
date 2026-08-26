@@ -1,16 +1,8 @@
-import { Installation } from "@opencode-ai/schema/installation"
 import { WebPush } from "@opencode-ai/schema/web-push"
-import { Context, Schema } from "effect"
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { LocationMiddleware } from "./location"
+import { Schema } from "effect"
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 
-export const makeWebPushGroup = <
-  LocationId extends HttpApiMiddleware.AnyId,
-  LocationService,
->(
-  locationMiddleware: Context.Key<LocationId, LocationService>,
-) =>
-  HttpApiGroup.make("server.webpush")
+export const WebPushGroup = HttpApiGroup.make("server.webpush")
     .add(
       HttpApiEndpoint.get("webpush.vapid.get", "/api/webpush/vapid", {
         success: Schema.Struct({ data: Schema.Struct({ publicKey: WebPush.VAPIDPublicKey }) }),
@@ -36,7 +28,7 @@ export const makeWebPushGroup = <
     )
     .add(
       HttpApiEndpoint.delete("webpush.subscription.remove", "/api/webpush/subscription/:id", {
-        params: { id: Installation.ID },
+        params: { id: WebPush.SubscriptionID },
         success: WebPush.RemoveSubscriptionResponse,
       }).annotateMerge(
         OpenApi.annotations({
@@ -46,5 +38,4 @@ export const makeWebPushGroup = <
         }),
       ),
     )
-    .middleware(locationMiddleware)
     .annotateMerge(OpenApi.annotations({ title: "Web Push", description: "Web Push notification endpoints." }))

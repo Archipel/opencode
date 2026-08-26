@@ -237,14 +237,6 @@ export default {
         );
       `)
       yield* tx.run(`
-        CREATE TABLE \`web_push_vapid\` (
-          \`id\` integer PRIMARY KEY CHECK (\`id\` = 1),
-          \`public_key\` text NOT NULL,
-          \`private_key\` text NOT NULL,
-          \`time_created\` integer NOT NULL
-        );
-      `)
-      yield* tx.run(`
         CREATE TABLE \`web_push_subscription\` (
           \`id\` text PRIMARY KEY,
           \`endpoint\` text NOT NULL,
@@ -252,6 +244,14 @@ export default {
           \`auth\` text NOT NULL,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`web_push_vapid\` (
+          \`id\` integer PRIMARY KEY,
+          \`public_key\` text NOT NULL,
+          \`private_key\` text NOT NULL,
+          \`time_created\` integer NOT NULL
         );
       `)
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
@@ -287,7 +287,9 @@ export default {
       yield* tx.run(`CREATE INDEX \`session_workspace_idx\` ON \`session\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);`)
       yield* tx.run(`CREATE INDEX \`todo_session_idx\` ON \`todo\` (\`session_id\`);`)
-      yield* tx.run(`CREATE INDEX \`web_push_subscription_time_created_idx\` ON \`web_push_subscription\` (\`time_created\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`web_push_subscription_time_created_idx\` ON \`web_push_subscription\` (\`time_created\`);`,
+      )
     })
   },
 } satisfies Omit<DatabaseMigration.Migration, "id">

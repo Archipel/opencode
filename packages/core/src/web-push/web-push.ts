@@ -1,15 +1,17 @@
 export * as WebPush from "./web-push"
 
-import { crypto } from "@std/crypto"
 import { eq } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer } from "effect"
+import webPush from "web-push"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
-import { WebPushTable, WebPushVAPIDTable } from "./sql"
+import { WebPushSubscriptionTable, WebPushVAPIDTable } from "./sql"
 import { WebPush } from "@opencode-ai/schema/web-push"
 
-export const VAPIDKeyPair = WebPush.VAPIDKeyPair
-export type VAPIDKeyPair = typeof VAPIDKeyPair.Type
+type VAPIDKeyPair = {
+  readonly publicKey: WebPush.VAPIDPublicKey
+  readonly privateKey: string
+}
 
 export const PushSubscription = WebPush.PushSubscription
 export type PushSubscription = typeof PushSubscription.Type
@@ -25,23 +27,9 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/WebPush") {}
 
 function generateVAPIDKeyPair(): Effect.Effect<VAPIDKeyPair> {
-  return Effect.gen(function* () {
-    const keyPair = yield* Effect.tryPromise(() =>
-      crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey", "deriveBits"]),
-    ).pipe(Effect.orDie)
-    const publicKey = yield* Effect.tryPromise(() =>
-      crypto.subtle.exportKey("raw", keyPair.publicKey),
-    ).pipe(Effect.orDie)
-    const privateKey = yield* Effect.tryPromise(() =>
-      crypto.subtle.exportKey("raw", keyPair.privateKey),
-    ).pipe(Effect.orDie)
-    const publicKeyB64 = yield* Effect.sync(() =>
-      btoa(String.fromCharCode(...new Uint8Array(publicKey))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, ""),
-    )
-    const privateKeyB64 = yield* Effect.sync(() =>
-      btoa(String.fromCharCode(...new Uint8Array(privateKey))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, ""),
-    )
-    return { publicKey: publicKeyB64, privateKey: privateKeyB64 }
+  return Effect.sync(() => {
+    const keyPair = webPush.generateVAPIDKeys()
+    return { publicKey: keyPair.publicKey as WebPush.VAPIDPublicKey, privateKey: keyPair.privateKey }
   })
 }
 

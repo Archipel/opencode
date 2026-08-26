@@ -681,6 +681,40 @@ const adaptGroup17 = (raw: RawClient["server.projectCopy"]) => ({
   refresh: Endpoint17_2(raw),
 })
 
+const Endpoint18_0 = (raw: RawClient["server.webpush"]) => () =>
+  raw["webpush.vapid.get"]({}).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint18_1Request = Parameters<RawClient["server.webpush"]["webpush.subscription.upsert"]>[0]
+type Endpoint18_1Input = {
+  readonly id: Endpoint18_1Request["payload"]["id"]
+  readonly endpoint: Endpoint18_1Request["payload"]["endpoint"]
+  readonly keys: Endpoint18_1Request["payload"]["keys"]
+}
+const Endpoint18_1 = (raw: RawClient["server.webpush"]) => (input: Endpoint18_1Input) =>
+  raw["webpush.subscription.upsert"]({
+    payload: { id: input["id"], endpoint: input["endpoint"], keys: input["keys"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint18_2Request = Parameters<RawClient["server.webpush"]["webpush.subscription.remove"]>[0]
+type Endpoint18_2Input = { readonly id: Endpoint18_2Request["params"]["id"] }
+const Endpoint18_2 = (raw: RawClient["server.webpush"]) => (input: Endpoint18_2Input) =>
+  raw["webpush.subscription.remove"]({ params: { id: input["id"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const adaptGroup18 = (raw: RawClient["server.webpush"]) => ({
+  get: Endpoint18_0(raw),
+  upsert: Endpoint18_1(raw),
+  remove: Endpoint18_2(raw),
+})
+
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   location: adaptGroup1(raw["server.location"]),
@@ -700,6 +734,7 @@ const adaptClient = (raw: RawClient) => ({
   questions: adaptGroup15(raw["server.question"]),
   references: adaptGroup16(raw["server.reference"]),
   projectCopies: adaptGroup17(raw["server.projectCopy"]),
+  webpush: adaptGroup18(raw["server.webpush"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

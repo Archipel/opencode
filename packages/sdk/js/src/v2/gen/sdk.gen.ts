@@ -395,6 +395,13 @@ import type {
   VcsGetResponses,
   VcsStatusErrors,
   VcsStatusResponses,
+  WebpushSubscriptionRemoveErrors,
+  WebpushSubscriptionRemoveResponses,
+  WebpushSubscriptionUpsertErrors,
+  WebpushSubscriptionUpsertResponses,
+  WebPushUpsertSubscriptionInput,
+  WebpushVapidGetErrors,
+  WebpushVapidGetResponses,
   WorktreeCreateErrors,
   WorktreeCreateInput,
   WorktreeCreateResponses,
@@ -7074,6 +7081,85 @@ export class V2 extends HeyApiClient {
   }
 }
 
+export class Vapid extends HeyApiClient {
+  /**
+   * Get VAPID public key
+   *
+   * Retrieve the server's VAPID public key for Web Push subscription.
+   */
+  public get<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<WebpushVapidGetResponses, WebpushVapidGetErrors, ThrowOnError>({
+      url: "/api/webpush/vapid",
+      ...options,
+    })
+  }
+}
+
+export class Subscription extends HeyApiClient {
+  /**
+   * Upsert push subscription
+   *
+   * Register or update a push subscription for the current installation.
+   */
+  public upsert<ThrowOnError extends boolean = false>(
+    parameters: {
+      webPushUpsertSubscriptionInput: WebPushUpsertSubscriptionInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "webPushUpsertSubscriptionInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      WebpushSubscriptionUpsertResponses,
+      WebpushSubscriptionUpsertErrors,
+      ThrowOnError
+    >({
+      url: "/api/webpush/subscription",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Remove push subscription
+   *
+   * Remove a push subscription by installation ID.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    return (options?.client ?? this.client).delete<
+      WebpushSubscriptionRemoveResponses,
+      WebpushSubscriptionRemoveErrors,
+      ThrowOnError
+    >({
+      url: "/api/webpush/subscription/{id}",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Webpush extends HeyApiClient {
+  private _vapid?: Vapid
+  get vapid(): Vapid {
+    return (this._vapid ??= new Vapid({ client: this.client }))
+  }
+
+  private _subscription?: Subscription
+  get subscription(): Subscription {
+    return (this._subscription ??= new Subscription({ client: this.client }))
+  }
+}
+
 export class OpencodeClient extends HeyApiClient {
   public static readonly __registry = new HeyApiRegistry<OpencodeClient>()
 
@@ -7215,5 +7301,10 @@ export class OpencodeClient extends HeyApiClient {
   private _v2?: V2
   get v2(): V2 {
     return (this._v2 ??= new V2({ client: this.client }))
+  }
+
+  private _webpush?: Webpush
+  get webpush(): Webpush {
+    return (this._webpush ??= new Webpush({ client: this.client }))
   }
 }

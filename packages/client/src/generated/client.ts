@@ -112,6 +112,11 @@ import type {
   ProjectCopiesRemoveOutput,
   ProjectCopiesRefreshInput,
   ProjectCopiesRefreshOutput,
+  WebpushGetOutput,
+  WebpushUpsertInput,
+  WebpushUpsertOutput,
+  WebpushRemoveInput,
+  WebpushRemoveOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -986,6 +991,36 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+    },
+    webpush: {
+      get: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: WebpushGetOutput }>(
+          { method: "GET", path: `/api/webpush/vapid`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
+          requestOptions,
+        ).then((value) => value.data),
+      upsert: (input: WebpushUpsertInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: WebpushUpsertOutput }>(
+          {
+            method: "POST",
+            path: `/api/webpush/subscription`,
+            body: { id: input["id"], endpoint: input["endpoint"], keys: input["keys"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      remove: (input: WebpushRemoveInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: WebpushRemoveOutput }>(
+          {
+            method: "DELETE",
+            path: `/api/webpush/subscription/${encodeURIComponent(input.id)}`,
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
     },
   }
 }

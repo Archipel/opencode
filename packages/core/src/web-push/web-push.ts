@@ -48,9 +48,17 @@ const layer = Layer.effect(
       yield* db
         .insert(WebPushVAPIDTable)
         .values({ id: 1, public_key: keyPair.publicKey, private_key: keyPair.privateKey, time_created: timeCreated })
+        .onConflictDoNothing({ target: WebPushVAPIDTable.id })
         .run()
         .pipe(Effect.orDie)
-      return keyPair
+      const persisted = yield* db
+        .select()
+        .from(WebPushVAPIDTable)
+        .where(eq(WebPushVAPIDTable.id, 1))
+        .get()
+        .pipe(Effect.orDie)
+      if (!persisted) return yield* Effect.die("Failed to persist Web Push VAPID key pair")
+      return { publicKey: persisted.public_key, privateKey: persisted.private_key }
     })
 
     const getVAPIDPublicKey = Effect.fn("WebPush.getVAPIDPublicKey")(function* () {
@@ -58,7 +66,9 @@ const layer = Layer.effect(
       return keyPair.publicKey
     })
 
-    const upsertSubscription = Effect.fn("WebPush.upsertSubscription")(function* (input: WebPush.UpsertSubscriptionInput) {
+    const upsertSubscription = Effect.fn("WebPush.upsertSubscription")(function* (
+      input: WebPush.UpsertSubscriptionInput,
+    ) {
       const timeNow = Date.now()
       const existing = yield* db
         .select()

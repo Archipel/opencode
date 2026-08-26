@@ -6,6 +6,7 @@ import { EventV2 } from "../event"
 import { makeGlobalNode } from "../effect/app-node"
 import { PermissionV2 } from "../permission"
 import { PermissionV1 } from "../v1/permission"
+import { base64Encode } from "../util/encode"
 import { WebPush } from "./web-push"
 import type { WebPush as WebPushSchema } from "@opencode-ai/schema/web-push"
 
@@ -24,39 +25,57 @@ const layer = Layer.effect(
     const keyPair = yield* webPushService.getVAPIDKeyPair()
     webPush.setVapidDetails("mailto:opencode@opencode.ai", keyPair.publicKey, keyPair.privateKey)
 
-    const deliver = Effect.fnUntraced(function* () {
+    const deliver = Effect.fnUntraced(function* (request: {
+      readonly data: { readonly id: string; readonly sessionID: string }
+      readonly location?: { readonly directory: string }
+    }) {
       const payload: WebPushSchema.PushPayload = {
         version: 1,
         title: "OpenCode permission request",
         body: "OpenCode is waiting for your approval",
-        data: { url: "/" },
-        tag: "opencode-permission",
+        data: {
+          url: request.location
+            ? `/${base64Encode(request.location.directory)}/session/${request.data.sessionID}`
+            : "/",
+        },
+        tag: `permission-${request.data.id}`,
       }
       const subscriptions = yield* webPushService.listSubscriptions()
-      yield* Effect.forEach(subscriptions, (subscription) =>
-        Effect.tryPromise(() =>
-          webPush.sendNotification(
-            {
-              endpoint: subscription.endpoint,
-              keys: subscription.keys,
-            },
-            JSON.stringify(payload),
-            { TTL: 60, urgency: "high" },
+      yield* Effect.forEach(
+        subscriptions,
+        (subscription) =>
+          Effect.tryPromise(() =>
+            webPush.sendNotification(
+              {
+                endpoint: subscription.endpoint,
+                keys: subscription.keys,
+              },
+              JSON.stringify(payload),
+              { TTL: 60, urgency: "high" },
+            ),
+          ).pipe(
+            Effect.catch((error) => {
+              const statusCode =
+                typeof error === "object" &&
+                error !== null &&
+                "statusCode" in error &&
+                typeof error.statusCode === "number"
+                  ? error.statusCode
+                  : undefined
+              if (statusCode === 404 || statusCode === 410) return webPushService.removeSubscription(subscription.id)
+              return Effect.logWarning(`Web Push delivery failed: ${error}`)
+            }),
           ),
-        ).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning(`Web Push delivery failed: ${error}`),
-          ),
-        ),
-      { concurrency: 5, discard: true })
+        { concurrency: 5, discard: true },
+      )
     })
 
     const permissionV2 = yield* events.subscribe(PermissionV2.Event.Asked).pipe(
-      Stream.runForEach(() => deliver()),
+      Stream.runForEach((request) => deliver(request)),
       Effect.forkScoped,
     )
     const permissionV1 = yield* events.subscribe(PermissionV1.Event.Asked).pipe(
-      Stream.runForEach(() => deliver()),
+      Stream.runForEach((request) => deliver(request)),
       Effect.forkScoped,
     )
 

@@ -138,6 +138,20 @@ const table = sqliteTable("session", {
 })
 ```
 
+## Local Patched Builds (this machine)
+
+When building an opencode binary locally for use on this machine (build + deploy to `~/.opencode/bin/opencode`), ALWAYS set an explicit version of the form `<latest-npm-release>-patched.<git-short-hash>`, e.g.:
+
+```sh
+# from packages/opencode
+OPENCODE_VERSION="$(npm view opencode-ai version)-patched.$(git rev-parse --short HEAD)" bun ./script/build.ts --single
+cp dist/opencode-linux-x64/bin/opencode ~/.opencode/bin/opencode
+```
+
+Why: a version not starting with `0.0.0-` makes `Script.channel` resolve to `latest`, so `Database.path()` returns the shared `~/.local/share/opencode/opencode.db` (`packages/core/src/database/database.ts`). Without it, every branch build gets its own `opencode-<channel>.db` and sessions become invisible across builds (`Error: Session not found` on resume). Runtime fallback for already-built channel binaries: `OPENCODE_DB=opencode.db opencode …`.
+
+Keep the replaced binary as `~/.opencode/bin/opencode.before-<name>` before overwriting.
+
 ## Testing
 
 - Avoid mocks as much as possible, you shouldn't be using globalThis.\* at all unless it's the only option.

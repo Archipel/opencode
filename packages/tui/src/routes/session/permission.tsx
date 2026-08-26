@@ -3,7 +3,6 @@ import { dirname } from "node:path"
 import { execFile } from "node:child_process"
 import { createMemo, For, Match, Show, Switch } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { TextareaRenderable } from "@opentui/core"
 import { useTheme, selectedForeground } from "../../context/theme"
 import type { PermissionRequest } from "@opencode-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
@@ -17,8 +16,10 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
+import { useRoute } from "../../context/route"
 
-type PermissionStage = "permission" | "always" | "reject" | "investigate" | "result" | "discuss"
+type PermissionStage = "permission" | "always" | "investigate" | "result" | "error"
+type RuleScope = "global" | "project" | "session"
 
 // Result of `ai-sessions gate investigate --cmd … --json` (see gate_investigate.rs).
 type Investigation = {
@@ -70,6 +71,10 @@ function investigateCommand(command: string): Promise<Investigation> {
     if (!parsed || typeof parsed.reasoning !== "string") throw new Error("malformed investigation reply")
     return parsed
   })
+}
+
+function exactCommandRegex(command: string) {
+  return `^${command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`
 }
 
 function EditBody(props: { request: PermissionRequest }) {
@@ -165,12 +170,13 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   const sdk = useSDK()
   const project = useProject()
   const sync = useSync()
+  const route = useRoute()
   const [store, setStore] = createStore({
     stage: "permission" as PermissionStage,
     investigating: false,
     investError: "",
     investigation: null as Investigation | null,
-    discussAction: "once" as "once" | "reject",
+    actionError: "",
   })
   const pathFormatter = usePathFormatter()
 
@@ -240,44 +246,57 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
     }
   }
 
-  const applyRule = async () => {
-    const rule = store.investigation?.rule
-    if (!rule || rule.rejected_reason) return
+  const applyRule = async (scope: RuleScope, exact = false) => {
+    const proposed = store.investigation?.rule
+    if (!exact && (!proposed || proposed.rejected_reason)) return
+    const command = bashCommand()
+    const regex = exact ? exactCommandRegex(command) : proposed!.regex
+    const scopeValue = scope === "project" ? props.directory ?? session()?.directory : props.request.sessionID
+    if (scope !== "global" && !scopeValue) {
+      setStore({ actionError: `Cannot determine the ${scope} scope`, stage: "error" })
+      return
+    }
     try {
-      const args = ["gate", "add", rule.regex, "--kind", "allow", "--host", "%"]
-      if (rule.note) args.push("--note", rule.note)
+      const args = ["gate", "add", regex, "--kind", "allow", "--host", "%", "--scope", scope]
+      if (scope !== "global") args.push("--scope-value", scopeValue!)
+      const note = exact ? "Approved from the OpenCode permission prompt (exact command)" : proposed?.note
+      if (note) args.push("--note", note)
       await runAiSessions(args, 30_000)
     } catch (e) {
-      setStore({
-        investError: e instanceof Error ? e.message : String(e),
-        stage: "result",
-      })
+      setStore({ actionError: e instanceof Error ? e.message : String(e), stage: "error" })
       return
     }
     setStore("stage", "permission")
     void replyOnce()
   }
 
-  const openDiscuss = (action: "once" | "reject") => {
-    setStore({ discussAction: action, stage: "discuss" })
-  }
-
-  const sendDiscuss = async (message: string) => {
-    const text = message.trim()
-    if (!text) return
-    if (store.discussAction === "reject") {
-      void replyReject(text)
-    } else {
-      // Allow the command once AND steer the session with the user's message.
-      void replyOnce()
-      void sdk.client.session.prompt({
-        sessionID: props.request.sessionID,
+  const openDiscussion = async () => {
+    const inv = store.investigation
+    if (!inv) return
+    const proposal = inv.rule && !inv.rule.rejected_reason ? inv.rule.regex : "No validated regex was proposed."
+    try {
+      const created = await sdk.client.session.create({
+        parentID: props.request.sessionID,
+        title: `Discuss auto-allow: ${bashCommand().slice(0, 60)}`,
         directory: props.directory,
         workspace: project.workspace.current(),
-        parts: [{ type: "text", text }],
       })
+      if (created.error || !created.data) throw new Error("Could not create a discussion session")
+      await sdk.client.session.prompt({
+        sessionID: created.data.id,
+        directory: props.directory,
+        workspace: project.workspace.current(),
+        parts: [
+          {
+            type: "text",
+            text: `Discuss whether this command should receive an ai-sessions gate rule. Do not execute the command or add a rule unless I explicitly ask you to.\n\nCommand:\n${bashCommand()}\n\nInvestigation (${inv.model}):\n${inv.reasoning}\n\nProposed rule:\n${proposal}`,
+          },
+        ],
+      })
+      route.navigate({ type: "session", sessionID: created.data.id })
+    } catch (e) {
+      setStore({ actionError: e instanceof Error ? e.message : String(e), stage: "error" })
     }
-    setStore("stage", "permission")
   }
 
   return (
@@ -394,40 +413,48 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               options={
                 propose
                   ? {
-                      apply: "Add rule & allow",
-                      onceMsg: "Allow once w/ message",
-                      rejectMsg: "Reject w/ message",
+                      global: "Allow globally",
+                      discuss: "Discuss",
+                      project: "Allow project",
+                      session: "Allow session",
+                      reject: "Reject",
                     }
-                  : { onceMsg: "Allow once w/ message", rejectMsg: "Reject w/ message" }
+                  : { discuss: "Discuss", once: "Allow once", reject: "Reject" }
               }
               fullscreen
               onEscape={() => setStore("stage", "permission")}
               onSelect={(option) => {
-                if (option === "apply") {
-                  void applyRule()
+                if (option === "global" || option === "project" || option === "session") {
+                  void applyRule(option)
                   return
                 }
-                if (option === "onceMsg") {
-                  openDiscuss("once")
+                if (option === "discuss") {
+                  void openDiscussion()
                   return
                 }
-                if (option === "rejectMsg") {
-                  openDiscuss("reject")
+                if (option === "once") {
+                  void replyOnce()
                   return
                 }
-                setStore("stage", "permission")
+                void replyReject()
               }}
             />
           )
         })()}
       </Match>
-      <Match when={store.stage === "discuss"}>
-        <DiscussPrompt
-          allow={store.discussAction === "once"}
-          onConfirm={(message) => {
-            void sendDiscuss(message)
-          }}
-          onCancel={() => setStore("stage", "result")}
+      <Match when={store.stage === "error"}>
+        <Prompt
+          title="Permission action failed"
+          body={
+            <box paddingLeft={1}>
+              <text fg={theme.error} wrapMode="word">
+                {store.actionError}
+              </text>
+            </box>
+          }
+          options={{ back: "Back" }}
+          escapeKey="back"
+          onSelect={() => setStore("stage", store.investigation ? "result" : "permission")}
         />
       </Match>
       <Match when={store.stage === "always"}>
@@ -466,18 +493,6 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               directory: props.directory,
               workspace: project.workspace.current(),
             })
-          }}
-        />
-      </Match>
-      <Match when={store.stage === "reject"}>
-        <DiscussPrompt
-          allow={false}
-          onConfirm={(message) => {
-            void replyReject(message)
-            setStore("stage", "permission")
-          }}
-          onCancel={() => {
-            setStore("stage", "permission")
           }}
         />
       </Match>
@@ -695,7 +710,13 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               body={current.body}
               options={
                 props.request.permission === "bash"
-                  ? { once: "Allow once", investigate: "Investigate auto-allow", reject: "Reject" }
+                  ? {
+                      once: "Allow once",
+                      investigate: "Investigate auto-allow",
+                      project: "Allow project",
+                      session: "Allow session",
+                      reject: "Reject",
+                    }
                   : { once: "Allow once", always: "Allow always", reject: "Reject" }
               }
               escapeKey="reject"
@@ -709,17 +730,12 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                   void startInvestigate()
                   return
                 }
+                if (option === "project" || option === "session") {
+                  void applyRule(option, true)
+                  return
+                }
                 if (option === "reject") {
-                  if (session()?.parentID) {
-                    setStore("stage", "reject")
-                    return
-                  }
-                  void sdk.client.permission.reply({
-                    reply: "reject",
-                    requestID: props.request.id,
-                    directory: props.directory,
-                    workspace: project.workspace.current(),
-                  })
+                  void replyReject()
                   return
                 }
                 void sdk.client.permission.reply({
@@ -736,92 +752,6 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
         })()}
       </Match>
     </Switch>
-  )
-}
-
-function DiscussPrompt(props: { allow: boolean; onConfirm: (message: string) => void; onCancel: () => void }) {
-  let input: TextareaRenderable
-  const { theme } = useTheme()
-  const tuiConfig = useTuiConfig()
-  const dimensions = useTerminalDimensions()
-  const narrow = createMemo(() => dimensions().width < 80)
-  useBindings(() => ({
-    mode: OPENCODE_BASE_MODE,
-    commands: [
-      {
-        name: "app.exit",
-        title: "Cancel permission message",
-        category: "Permission",
-        run() {
-          props.onCancel()
-        },
-      },
-    ],
-    bindings: [
-      { key: "escape", desc: "Cancel permission message", group: "Permission", cmd: () => props.onCancel() },
-      ...tuiConfig.keybinds.get("app.exit"),
-      {
-        key: "return",
-        desc: props.allow ? "Allow once with message" : "Reject with message",
-        group: "Permission",
-        cmd: () => props.onConfirm(input.plainText),
-      },
-    ],
-  }))
-
-  return (
-    <box
-      backgroundColor={theme.backgroundPanel}
-      border={["left"]}
-      borderColor={props.allow ? theme.success : theme.error}
-      customBorderChars={SplitBorder.customBorderChars}
-    >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
-        <box flexDirection="row" gap={1} paddingLeft={1}>
-          <text fg={props.allow ? theme.success : theme.error}>{props.allow ? "✓" : "△"}</text>
-          <text fg={theme.text}>{props.allow ? "Allow once with message" : "Reject with message"}</text>
-        </box>
-        <box paddingLeft={1}>
-          <text fg={theme.textMuted}>
-            {props.allow
-              ? "The command runs once; your message is sent to the agent"
-              : "Tell OpenCode what to do differently"}
-          </text>
-        </box>
-      </box>
-      <box
-        flexDirection={narrow() ? "column" : "row"}
-        flexShrink={0}
-        paddingTop={1}
-        paddingLeft={2}
-        paddingRight={3}
-        paddingBottom={1}
-        backgroundColor={theme.backgroundElement}
-        justifyContent={narrow() ? "flex-start" : "space-between"}
-        alignItems={narrow() ? "flex-start" : "center"}
-        gap={1}
-      >
-        <textarea
-          ref={(val: TextareaRenderable) => {
-            input = val
-            val.traits = { status: props.allow ? "ALLOW" : "REJECT" }
-          }}
-          focused
-          textColor={theme.text}
-          focusedTextColor={theme.text}
-          cursorColor={theme.primary}
-          cursorStyle={tuiConfig.cursor}
-        />
-        <box flexDirection="row" gap={2} flexShrink={0}>
-          <text fg={theme.text}>
-            enter <span style={{ fg: theme.textMuted }}>confirm</span>
-          </text>
-          <text fg={theme.text}>
-            esc <span style={{ fg: theme.textMuted }}>back</span>
-          </text>
-        </box>
-      </box>
-    </box>
   )
 }
 

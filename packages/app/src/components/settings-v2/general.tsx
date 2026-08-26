@@ -9,6 +9,7 @@ import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { useUpdaterAction } from "../updater-action"
 import { useSettings } from "@/context/settings"
+import { useWebPush } from "@/context/web-push"
 import { ExternalLink } from "../external-link"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
@@ -278,6 +279,7 @@ export const SettingsGeneralV2: Component<{
   const platform = usePlatform()
   const dialog = useDialog()
   const settings = useSettings()
+  const webPush = useWebPush()
   const mobile = createMediaQuery("(max-width: 767px)")
   const updater = useUpdaterAction()
   const permissionScope = createPermissionScopeController(() => props.sessionID)
@@ -459,17 +461,48 @@ export const SettingsGeneralV2: Component<{
           </div>
         </SettingsRowV2>
 
-        <SettingsRowV2
-          title={language.t("settings.general.notifications.permissions.title")}
-          description={language.t("settings.general.notifications.permissions.description")}
-        >
-          <div data-action="settings-notifications-permissions">
-            <Switch
-              checked={settings.notifications.permissions()}
-              onChange={(checked) => settings.notifications.setPermissions(checked)}
-            />
-          </div>
-        </SettingsRowV2>
+        <Show when={webPush.shouldShowToggle}>
+          <SettingsRowV2
+            title={language.t("settings.general.notifications.permissions.title")}
+            description={language.t("settings.general.notifications.permissions.description")}
+          >
+            <div data-action="settings-notifications-permissions-webpush">
+              <Switch
+                checked={webPush.subscribed()}
+                onChange={() => webPush.toggle()}
+                disabled={webPush.loading()}
+              />
+            </div>
+          </SettingsRowV2>
+        </Show>
+
+        <Show when={() => !webPush.shouldShowToggle() && webPush.categoryEnabled()}>
+          <SettingsRowV2
+            title={language.t("settings.general.notifications.permissions.title")}
+            description={language.t("settings.general.notifications.permissions.description")}
+          >
+            <div data-action="settings-notifications-permissions">
+              <Switch
+                checked={settings.notifications.permissions()}
+                onChange={(checked) => settings.notifications.setPermissions(checked)}
+              />
+            </div>
+          </SettingsRowV2>
+        </Show>
+
+        <Show when={() => !webPush.categoryEnabled()}>
+          <SettingsRowV2
+            title={language.t("settings.general.notifications.permissions.title")}
+            description={language.t("settings.general.notifications.permissions.description")}
+          >
+            <div data-action="settings-notifications-permissions">
+              <Switch
+                checked={settings.notifications.permissions()}
+                onChange={(checked) => settings.notifications.setPermissions(checked)}
+              />
+            </div>
+          </SettingsRowV2>
+        </Show>
 
         <SettingsRowV2
           title={language.t("settings.general.notifications.errors.title")}

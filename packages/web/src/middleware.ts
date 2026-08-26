@@ -77,13 +77,22 @@ function localeFromAcceptLanguage(header: string | null) {
   return locale ?? "root"
 }
 
-export const onRequest = defineMiddleware((ctx, next) => {
+export const onRequest = defineMiddleware(async (ctx, next) => {
   const alias = docsAlias(ctx.url.pathname)
   if (alias) {
     return redirect(ctx.url, alias.path, alias.locale)
   }
 
-  if (ctx.url.pathname !== "/docs" && ctx.url.pathname !== "/docs/") return next()
+  if (ctx.url.pathname !== "/docs" && ctx.url.pathname !== "/docs/") {
+    const response = await next()
+    if (ctx.url.pathname === "/sw.js") {
+      const headers = new Headers(response.headers)
+      headers.set("Cache-Control", "no-cache, no-store, must-revalidate")
+      headers.set("Service-Worker-Allowed", "/")
+      return new Response(response.body, { status: response.status, headers })
+    }
+    return response
+  }
 
   const locale =
     localeFromCookie(ctx.request.headers.get("cookie")) ??

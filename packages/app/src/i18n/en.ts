@@ -1140,11 +1140,17 @@ export const dict = {
   "workspace.delete.title": "Delete workspace",
   "workspace.delete.confirm": 'Delete workspace "{{name}}"?',
   "workspace.delete.button": "Delete workspace",
-  "workspace.reset.title": "Reset workspace",
+"workspace.reset.title": "Reset workspace",
   "workspace.reset.confirm": 'Reset workspace "{{name}}"?',
   "workspace.reset.button": "Reset workspace",
   "workspace.reset.archived.none": "No active sessions will be archived.",
   "workspace.reset.archived.one": "1 session will be archived.",
   "workspace.reset.archived.many": "{{count}} sessions will be archived.",
   "workspace.reset.note": "This will reset the workspace to match the default branch.",
+
+  "error.webpush.notSupported": "Web Push is not supported in this browser",
+  "error.webpush.permissionDenied": "Notification permission was denied",
+  "error.webpush.subscribeFailed": "Failed to subscribe to push notifications",
+  "error.webpush.unsubscribeFailed": "Failed to unsubscribe from push notifications",
+  "error.webpush.noServer": "No server available for Web Push"
 }

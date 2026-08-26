@@ -1,31 +1,56 @@
 import type { Session } from "@opencode-ai/sdk/v2/client"
-import type { Tab } from "@/context/tabs"
-import { ServerConnection } from "@/context/server"
 import { compareSessionTime } from "@/pages/layout/helpers"
-import type { HomeSessionRecord } from "./home-sessions-controller"
+import { DateTime } from "luxon"
 
-export type { HomeSessionRecord }
-
-function hasOpenTab(tabs: Tab[], server: ServerConnection.Key, session: Session) {
-  return tabs.some((tab) => tab.type === "session" && tab.server === server && tab.sessionId === session.id)
+export type HomeSessionGroup<T> = {
+  id: "active" | "today" | "yesterday" | "older"
+  title: string
+  sessions: T[]
 }
 
-export function orderHomeSessions(
-  records: HomeSessionRecord[],
-  tabs: Tab[],
-  server: ServerConnection.Key,
-  isWorking: (sessionId: string) => boolean,
-): HomeSessionRecord[] {
-  const active = new Set<string>()
-  for (const record of records) {
-    if (hasOpenTab(tabs, server, record.session) || isWorking(record.session.id)) {
-      active.add(record.session.id)
-    }
-  }
+export function orderHomeSessions<T extends { session: Session }>(records: T[], isActive: (record: T) => boolean) {
   return [...records].sort((a, b) => {
-    const aActive = active.has(a.session.id)
-    const bActive = active.has(b.session.id)
+    const aActive = isActive(a)
+    const bActive = isActive(b)
     if (aActive !== bActive) return aActive ? -1 : 1
     return compareSessionTime(a.session, b.session)
   })
+}
+
+export function groupHomeSessions<T extends { session: Session }>(
+  records: T[],
+  translate: (
+    key:
+      | "sidebar.project.recentSessions"
+      | "home.sessions.group.today"
+      | "home.sessions.group.yesterday"
+      | "home.sessions.group.older",
+  ) => string,
+  isActive: (record: T) => boolean,
+  now: DateTime<boolean> = DateTime.local(),
+): HomeSessionGroup<T>[] {
+  const yesterday = now.minus({ days: 1 })
+  const inactive = records.filter((record) => !isActive(record))
+  const activeSessions = records.filter(isActive)
+  const todaySessions = inactive.filter((record) =>
+    DateTime.fromMillis(record.session.time.updated ?? record.session.time.created).hasSame(now, "day"),
+  )
+  const yesterdaySessions = inactive.filter((record) =>
+    DateTime.fromMillis(record.session.time.updated ?? record.session.time.created).hasSame(yesterday, "day"),
+  )
+  const olderSessions = inactive.filter((record) => {
+    const time = DateTime.fromMillis(record.session.time.updated ?? record.session.time.created)
+    return !time.hasSame(now, "day") && !time.hasSame(yesterday, "day")
+  })
+  const olderTitle =
+    activeSessions.length === 0 && todaySessions.length === 0 && yesterdaySessions.length === 0
+      ? translate("sidebar.project.recentSessions")
+      : translate("home.sessions.group.older")
+  const groups: HomeSessionGroup<T>[] = [
+    { id: "active", title: translate("sidebar.project.recentSessions"), sessions: activeSessions },
+    { id: "today", title: translate("home.sessions.group.today"), sessions: todaySessions },
+    { id: "yesterday", title: translate("home.sessions.group.yesterday"), sessions: yesterdaySessions },
+    { id: "older", title: olderTitle, sessions: olderSessions },
+  ]
+  return groups.filter((group) => group.sessions.length > 0)
 }

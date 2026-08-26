@@ -2,7 +2,6 @@ import type { Session } from "@opencode-ai/sdk/v2/client"
 import { preloadMarkdown } from "@opencode-ai/session-ui/markdown-cache"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useQuery } from "@tanstack/solid-query"
-import { DateTime } from "luxon"
 import { type Accessor, createEffect, createMemo, createRoot, type JSX, startTransition } from "solid-js"
 import { produce } from "solid-js/store"
 import { useCommand } from "@/context/command"
@@ -14,10 +13,9 @@ import {
 import type { LocalProject } from "@/context/layout"
 import { useLanguage } from "@/context/language"
 import { ServerConnection } from "@/context/server"
-import { sessionHasOpenTab, useTabs, type Tab } from "@/context/tabs"
+import { sessionHasOpenTab, useTabs } from "@/context/tabs"
 import { compareSessionTime, displayName, errorMessage, projectForSession } from "@/pages/layout/helpers"
-import { orderHomeSessions } from "./home-session-order"
-import type { ServerSync } from "@/context/server-sync"
+import { groupHomeSessions, orderHomeSessions, type HomeSessionGroup as SessionGroup } from "./home-session-order"
 import { useSessionTabAvatarState } from "@/pages/layout/project-avatar-state"
 import { pathKey } from "@/utils/path-key"
 import { showToast } from "@/utils/toast"
@@ -33,11 +31,7 @@ export type HomeSessionRecord = {
   projectName: string
 }
 
-export type HomeSessionGroup = {
-  id: "today" | "yesterday" | "older"
-  title: string
-  sessions: HomeSessionRecord[]
-}
+export type HomeSessionGroup = SessionGroup<HomeSessionRecord>
 
 export type OpenSessionOptions = { background?: boolean }
 
@@ -98,13 +92,12 @@ export function createHomeSessionsController(home: HomeController) {
       projectByID,
     }),
   )
-  const orderedRecords = createMemo(() => {
-    const sync = focusedSync()
-    const server = home.selection.value().server
-    return orderHomeSessions(allRecords(), tabs.store, server, (sessionId) => sync.session.data.session_working(sessionId))
-  })
+  const isActive = (record: HomeSessionRecord) =>
+    sessionHasOpenTab(tabs.store, home.selection.value().server, record.session) ||
+    focusedSync().session.data.session_working(record.session.id)
+  const orderedRecords = createMemo(() => orderHomeSessions(allRecords(), isActive))
   const records = createMemo(() => orderedRecords().slice(0, HOME_SESSION_LIMIT))
-  const groups = createMemo(() => groupSessions(records(), language))
+  const groups = createMemo(() => groupHomeSessions(records(), language.t, isActive))
   const prefetched = new Set<string>()
 
   createEffect(() => {
@@ -288,30 +281,6 @@ function buildHomeSessionRecords(input: {
 
 export function homeSessionSearchKey(record: HomeSessionRecord) {
   return `${pathKey(record.session.directory)}:${record.session.id}`
-}
-
-function groupSessions(records: HomeSessionRecord[], language: ReturnType<typeof useLanguage>): HomeSessionGroup[] {
-  const now = DateTime.local()
-  const yesterday = now.minus({ days: 1 })
-  const todaySessions = records.filter((record) =>
-    DateTime.fromMillis(record.session.time.updated ?? record.session.time.created).hasSame(now, "day"),
-  )
-  const yesterdaySessions = records.filter((record) =>
-    DateTime.fromMillis(record.session.time.updated ?? record.session.time.created).hasSame(yesterday, "day"),
-  )
-  const olderSessions = records.filter((record) => {
-    const time = DateTime.fromMillis(record.session.time.updated ?? record.session.time.created)
-    return !time.hasSame(now, "day") && !time.hasSame(yesterday, "day")
-  })
-  const olderTitle =
-    todaySessions.length === 0 && yesterdaySessions.length === 0
-      ? language.t("sidebar.project.recentSessions")
-      : language.t("home.sessions.group.older")
-  return [
-    { id: "today" as const, title: language.t("home.sessions.group.today"), sessions: todaySessions },
-    { id: "yesterday" as const, title: language.t("home.sessions.group.yesterday"), sessions: yesterdaySessions },
-    { id: "older" as const, title: olderTitle, sessions: olderSessions },
-  ].filter((group) => group.sessions.length > 0)
 }
 
 export type HomeSessionsController = ReturnType<typeof createHomeSessionsController>

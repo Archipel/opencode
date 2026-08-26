@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import type { Session } from "@opencode-ai/sdk/v2/client"
-import { orderHomeSessions, type HomeSessionRecord } from "./home-session-order"
+import { DateTime } from "luxon"
+import { groupHomeSessions, orderHomeSessions } from "./home-session-order"
+import type { HomeSessionRecord } from "./home-sessions-controller"
 import { pendingHomeProjectDirectories } from "./home-project-discovery"
-import type { Tab } from "@/context/tabs"
-import { ServerConnection } from "@/context/server"
 
 function session(input: { id: string; directory: string; updated: number }): Session {
   return {
@@ -21,9 +21,6 @@ function record(input: { id: string; directory: string; updated: number }): Home
   const s = session(input)
   return { session: s, project: { name: "test", worktree: input.directory, expanded: false }, projectName: "test" }
 }
-
-const mockTabs: Tab[] = []
-const mockServer = ServerConnection.Key.make("http://localhost:1234")
 
 // Mirrors ServerProjects.open(), which prepends new worktrees.
 function prependAll(directories: string[], initial: string[] = []) {
@@ -87,70 +84,60 @@ describe("orderHomeSessions", () => {
   ]
 
   test("preserves newest-first order when no sessions are active", () => {
-    const result = orderHomeSessions(baseRecords, mockTabs, mockServer, () => false)
+    const result = orderHomeSessions(baseRecords, () => false)
     expect(result.map((r) => r.session.id)).toEqual(["newest", "middle", "oldest"])
   })
 
   test("moves open-tab sessions to front, preserving recency within active partition", () => {
-    const tabs: Tab[] = [{ type: "session", server: mockServer, sessionId: "middle" }]
-    const result = orderHomeSessions(baseRecords, tabs, mockServer, () => false)
+    const result = orderHomeSessions(baseRecords, (record) => record.session.id === "middle")
     expect(result.map((r) => r.session.id)).toEqual(["middle", "newest", "oldest"])
   })
 
   test("moves working sessions to front, preserving recency within active partition", () => {
-    const isWorking = (id: string) => id === "oldest"
-    const result = orderHomeSessions(baseRecords, mockTabs, mockServer, isWorking)
+    const result = orderHomeSessions(baseRecords, (record) => record.session.id === "oldest")
     expect(result.map((r) => r.session.id)).toEqual(["oldest", "newest", "middle"])
   })
 
   test("open tab takes precedence but both are active; recency within active partition", () => {
-    const tabs: Tab[] = [{ type: "session", server: mockServer, sessionId: "middle" }]
-    const isWorking = (id: string) => id === "oldest"
-    const result = orderHomeSessions(baseRecords, tabs, mockServer, isWorking)
+    const result = orderHomeSessions(baseRecords, (record) => ["middle", "oldest"].includes(record.session.id))
     // Both middle (open tab) and oldest (working) are active; newest is inactive
     // Active partition should be sorted by recency: middle (200) > oldest (100)
     expect(result.map((r) => r.session.id)).toEqual(["middle", "oldest", "newest"])
   })
 
   test("multiple active sessions sorted by recency within active partition", () => {
-    const tabs: Tab[] = [
-      { type: "session", server: mockServer, sessionId: "oldest" },
-      { type: "session", server: mockServer, sessionId: "newest" },
-    ]
-    const result = orderHomeSessions(baseRecords, tabs, mockServer, () => false)
+    const result = orderHomeSessions(baseRecords, (record) => ["oldest", "newest"].includes(record.session.id))
     // Active: newest (300), oldest (100) - sorted by recency
     // Inactive: middle (200)
     expect(result.map((r) => r.session.id)).toEqual(["newest", "oldest", "middle"])
   })
 
   test("inactive sessions preserve newest-first order after active partition", () => {
-    const tabs: Tab[] = [{ type: "session", server: mockServer, sessionId: "middle" }]
-    const result = orderHomeSessions(baseRecords, tabs, mockServer, () => false)
+    const result = orderHomeSessions(baseRecords, (record) => record.session.id === "middle")
     // Active: middle
     // Inactive: newest (300), oldest (100) - sorted by recency
     expect(result.map((r) => r.session.id)).toEqual(["middle", "newest", "oldest"])
   })
 
   test("handles empty records array", () => {
-    const result = orderHomeSessions([], mockTabs, mockServer, () => false)
+    const result = orderHomeSessions([], () => false)
     expect(result).toEqual([])
   })
 
   test("handles all sessions active", () => {
-    const tabs: Tab[] = [
-      { type: "session", server: mockServer, sessionId: "oldest" },
-      { type: "session", server: mockServer, sessionId: "middle" },
-      { type: "session", server: mockServer, sessionId: "newest" },
-    ]
-    const result = orderHomeSessions(baseRecords, tabs, mockServer, () => false)
+    const result = orderHomeSessions(baseRecords, () => true)
     expect(result.map((r) => r.session.id)).toEqual(["newest", "middle", "oldest"])
   })
 
-  test("handles sessions from different server (not active)", () => {
-    const otherServer = ServerConnection.Key.make("http://localhost:5678")
-    const tabs: Tab[] = [{ type: "session", server: otherServer, sessionId: "newest" }]
-    const result = orderHomeSessions(baseRecords, tabs, mockServer, () => false)
-    // Tab is for different server, so no sessions are active
-    expect(result.map((r) => r.session.id)).toEqual(["newest", "middle", "oldest"])
+  test("groups an older active session before a newer inactive session", () => {
+    const now = DateTime.local(2026, 8, 26, 12)
+    const records = [
+      record({ id: "inactive", directory: "/repo/a", updated: now.toMillis() }),
+      record({ id: "active", directory: "/repo/b", updated: now.minus({ days: 3 }).toMillis() }),
+    ]
+    const groups = groupHomeSessions(records, (key) => key, (item) => item.session.id === "active", now)
+
+    expect(groups.map((group) => group.id)).toEqual(["active", "today"])
+    expect(groups.flatMap((group) => group.sessions.map((item) => item.session.id))).toEqual(["active", "inactive"])
   })
 })

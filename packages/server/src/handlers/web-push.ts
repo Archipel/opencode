@@ -1,5 +1,5 @@
 import { WebPush } from "@opencode-ai/core/web-push"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 
@@ -31,4 +31,4 @@ export const WebPushHandler = HttpApiBuilder.group(Api, "server.webpush", (handl
         }),
       )
   }),
-)
+).pipe(Layer.provide(WebPush.layer))

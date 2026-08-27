@@ -1,8 +1,9 @@
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { createMemo, createSignal, onMount } from "solid-js"
+import { useGlobal } from "./global"
 import { useLanguage } from "./language"
+import { useServer } from "./server"
 import { useSettings } from "./settings"
-import { useServerSDK } from "./server-sdk"
 import { usePlatform } from "./platform"
 
 interface WebPushState {
@@ -36,8 +37,13 @@ export const { use: useWebPush, provider: WebPushProvider } = createSimpleContex
   init: () => {
     const language = useLanguage()
     const settings = useSettings()
-    const serverSDK = useServerSDK()
+    const global = useGlobal()
+    const server = useServer()
     const platform = usePlatform()
+    const serverSDK = () => {
+      if (!server.current) throw new Error(language.t("error.serverSDK.noServerAvailable"))
+      return global.ensureServerCtx(server.current).sdk
+    }
     const [state, setState] = createSignal<WebPushState>({
       supported: isWebPushSupported() && platform.platform !== "desktop",
       permission: typeof Notification === "undefined" ? "default" : Notification.permission,
